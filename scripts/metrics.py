@@ -8,6 +8,8 @@ from sklearn.metrics.pairwise import rbf_kernel, polynomial_kernel
 from pymcd.mcd import Calculate_MCD
 from torch.nn.utils.rnn import pad_sequence
 from pesq import pesq
+from tqdm import tqdm
+import random
 
 
 processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
@@ -146,67 +148,89 @@ def calculate_metrics(src_wavs, gen_wavs, src_embeddings=None, gen_embeddings=No
     return results
 
 
-def calculate_metrics_for_all_data(src_paths, gen_paths_list, model_names):
+def calculate_metrics_for_all_data(src_paths, gen_paths_list, model_names, n_split=10):
     '''
     funkcja zoptymalizowana pod wyliczanie wszystkich metryk na raz dla każdego modelu
     '''
-    results = []
+    results =  {model_name: {'sdr': [], 'fad': [], 'kid': [], 'mcd': [], 'pesq': []} for model_name in model_names}
 
-    src_wavs = [load_audio(path) for path in src_paths]
-    src_log_specs = [librosa.amplitude_to_db(np.abs(librosa.stft(wav.cpu().numpy())), ref=np.max) for wav in src_wavs]
-    src_embeddings = extract_embeddings(processor, model, src_wavs)
-    src_mean = np.mean(src_embeddings, axis=0)
-    src_cov = np.cov(src_embeddings, rowvar=False)
-    src_K = rbf_kernel(src_embeddings)
-    src_wavs_int = [(wav.numpy() * 32767).astype(np.int16) for wav in src_wavs]
+    random.seed(2137)
+    indexes = list(range(len(src_paths)))[:]
+    random.shuffle(indexes)
+    section_range = len(indexes) // n_split
+    rest = len(indexes) % n_split
+    sections = []
+    start = 0
+    for i in range(n_split):
+        dodatkowy = 1 if i < rest else 0
+        end = start + section_range + dodatkowy
+        sections.append(set(indexes[start:end]))
+        start = end
 
-    for gen_paths, model_name in tqdm(zip(gen_paths_list, model_names)):
-        result = {'model': model_name}
+    for section in tqdm(sections):
+        section_src_paths = [path for i, path in enumerate(src_paths) if i in section]
+        src_wavs = [load_audio(path) for path in section_src_paths]
+        src_log_specs = [librosa.amplitude_to_db(np.abs(librosa.stft(wav.cpu().numpy())), ref=np.max) for wav in src_wavs]
+        src_embeddings = extract_embeddings(processor, model, pad_sequence(src_wavs, batch_first=True))
+        src_mean = np.mean(src_embeddings, axis=0)
+        src_cov = np.cov(src_embeddings, rowvar=False)
+        src_K = rbf_kernel(src_embeddings)
+        src_wavs_int = [(wav.numpy() * 32767).astype(np.int16) for wav in src_wavs]
 
-        gen_wavs = [load_audio(path) for path in gen_paths]
-        gen_log_specs = [librosa.amplitude_to_db(np.abs(librosa.stft(wav.cpu().numpy())), ref=np.max) for wav in gen_wavs]
-        gen_embeddings = extract_embeddings(processor, model, gen_wavs)
-        gen_mean = np.mean(gen_embeddings, axis=0)
-        gen_cov = np.cov(gen_embeddings, rowvar=False)
-        gen_K = rbf_kernel(gen_embeddings)
-        gen_wavs_int = [(wav.numpy() * 32767).astype(np.int16) for wav in gen_wavs]
+        for gen_paths, model_name in tqdm(zip(gen_paths_list, model_names)):
+            # result = {'model': model_name, 'sdr': [], 'fad': [], 'kid': [], 'mcd': [], 'pesq': []}
+            result = results[model_name]
+            section_gen_paths = [path for i, path in enumerate(gen_paths) if i in section]
+            gen_wavs = [load_audio(path) for path in section_gen_paths]
+            gen_log_specs = [librosa.amplitude_to_db(np.abs(librosa.stft(wav.cpu().numpy())), ref=np.max) for wav in gen_wavs]
+            gen_embeddings = extract_embeddings(processor, model, pad_sequence(gen_wavs, batch_first=True))
+            gen_mean = np.mean(gen_embeddings, axis=0)
+            gen_cov = np.cov(gen_embeddings, rowvar=False)
+            gen_K = rbf_kernel(gen_embeddings)
+            gen_wavs_int = [(wav.numpy() * 32767).astype(np.int16) for wav in gen_wavs]
 
-        # SDR
-        sdrs = []
-        for src, gen in zip(src_log_specs, gen_log_specs):
-            min_len = min(src.shape[1], gen.shape[1])
-            src = src[:, :min_len]
-            gen = gen[:, :min_len]
-            noise = src - gen
-            sdr = 10 * np.log10(np.sum(np.abs(src) ** 2) / np.sum(np.abs(noise) ** 2))
-            sdrs.append(sdr)
-        result['sdr'] = np.mean(sdrs)
+            # SDR
+            sdrs = []
+            for src, gen in zip(src_log_specs, gen_log_specs):
+                min_len = min(src.shape[1], gen.shape[1])
+                src = src[:, :min_len]
+                gen = gen[:, :min_len]
+                noise = src - gen
+                sdr = 10 * np.log10(np.sum(np.abs(src) ** 2) / np.sum(np.abs(noise) ** 2))
+                sdrs.append(sdr)
+            result['sdr'].append(np.mean(sdrs))
 
-        # FAD
-        cov_sqrt = sqrtm(src_cov @ gen_cov)
-        if np.iscomplexobj(cov_sqrt):
-            cov_sqrt = cov_sqrt.real
-        fad = np.sum((src_mean - gen_mean) ** 2) + np.trace(src_cov + gen_cov - 2 * cov_sqrt)
-        result['fad'] = fad
+            # FAD
+            cov_sqrt = sqrtm(src_cov @ gen_cov)
+            if np.iscomplexobj(cov_sqrt):
+                cov_sqrt = cov_sqrt.real
+            fad = np.sum((src_mean - gen_mean) ** 2) + np.trace(src_cov + gen_cov - 2 * cov_sqrt)
+            result['fad'].append(fad)
 
-        # KID
-        src_gen_K = rbf_kernel(src_embeddings, gen_embeddings)
-        m, n = src_embeddings.shape[0], gen_embeddings.shape[0]
-        kid = (np.sum(src_K) / (m * m) + np.sum(gen_K) / (n * n) - 2 * np.sum(src_gen_K) / (m * n))
-        result['kid'] = kid
+            # KID
+            src_gen_K = rbf_kernel(src_embeddings, gen_embeddings)
+            m, n = src_embeddings.shape[0], gen_embeddings.shape[0]
+            kid = (np.sum(src_K) / (m * m) + np.sum(gen_K) / (n * n) - 2 * np.sum(src_gen_K) / (m * n))
+            result['kid'].append(kid)
 
-        # MCD
-        mcds = []
-        for src, gen in zip(src_paths, gen_paths):
-            mcds.append(mcd_toolbox.calculate_mcd(src, gen))
-        result['mcd'] = np.mean(mcds)
+            # MCD
+            mcds = []
+            for src, gen in zip(section_src_paths, section_gen_paths):
+                mcds.append(mcd_toolbox.calculate_mcd(src, gen))
+            result['mcd'].append(np.mean(mcds))
 
-        # pesq
-        pesqs = []
-        for src, gen in zip(src_wavs_int, gen_wavs_int):
-            pesqs.append(pesq(16000, src, gen, 'wb'))
-        result['pesq'] = np.mean(pesqs)
+            # pesq
+            pesqs = []
+            for src, gen in zip(src_wavs_int, gen_wavs_int):
+                pesqs.append(pesq(16000, src, gen, 'wb'))
+            result['pesq'].append(np.mean(pesqs))
 
-        results.append(result)
+    for model_name in model_names:
+        result = results[model_name]
+        result['sdr'] = np.mean(result['sdr'])
+        result['fad'] = np.mean(result['fad'])
+        result['kid'] = np.mean(result['kid'])
+        result['mcd'] = np.mean(result['mcd'])
+        result['pesq'] = np.mean(result['pesq'])
     
     return results

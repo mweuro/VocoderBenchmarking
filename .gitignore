@@ -1,2 +1,4 @@
 *__pycache__
 *tmpdir
+pretrained_models/
+generated/
