@@ -54,7 +54,6 @@ def clipping_noise(signal: np.array,
                    threshold: float) -> np.array:
     
     boundary = threshold * max(signal)
-    print(boundary)
     noised_signal = signal.copy()
     noised_signal[signal > boundary] = boundary
     noised_signal[signal < -boundary] = -boundary
@@ -94,3 +93,10 @@ def brownian_noise(f):
 @PSDGenerator
 def pink_noise(f):
     return 1/np.where(f == 0, float('inf'), np.sqrt(f))
+
+
+def color_noise(signal: np.array,
+                    *,
+                    color: function,
+                    c: float) -> np.array:
+    return signal + c * color(signal.shape[0]) 

@@ -23,14 +23,28 @@ def _noise_psd(N, psd = lambda f: 1) -> np.ndarray:
     S = psd(np.fft.rfftfreq(N))
     S = S / np.sqrt(np.mean(S**2))
     X_shaped = X_white * S
+<<<<<<< HEAD
+    noise = np.fft.irfft(X_shaped)
+    
+    return np.append(noise, 0.) if N % 2 == 1 else noise
+=======
     return np.fft.irfft(X_shaped)
+>>>>>>> main
 
 
 
 
 
 
+<<<<<<< HEAD
+class Noise: pass
+
+
+
+class WhiteNoise(Noise):
+=======
 class WhiteNoise:
+>>>>>>> main
     def __init__(self, c: float) -> None:
         self.c = c
     
@@ -50,7 +64,11 @@ class WhiteNoise:
 
 
 
+<<<<<<< HEAD
+class BlueNoise(Noise):
+=======
 class BlueNoise:
+>>>>>>> main
     def __init__(self, c: float) -> None:
         self.c = c
     
@@ -70,7 +88,11 @@ class BlueNoise:
 
 
 
+<<<<<<< HEAD
+class VioletNoise(Noise):
+=======
 class VioletNoise:
+>>>>>>> main
     def __init__(self, c: float) -> None:
         self.c = c
     
@@ -90,7 +112,11 @@ class VioletNoise:
 
 
 
+<<<<<<< HEAD
+class BrownianNoise(Noise):
+=======
 class BrownianNoise:
+>>>>>>> main
     def __init__(self, c: float) -> None:
         self.c = c
     
@@ -110,7 +136,11 @@ class BrownianNoise:
 
 
 
+<<<<<<< HEAD
+class PinkNoise(Noise):
+=======
 class PinkNoise:
+>>>>>>> main
     def __init__(self, c: float) -> None:
         self.c = c
     
@@ -130,7 +160,11 @@ class PinkNoise:
     
         
 
+<<<<<<< HEAD
+class ImpulseNoise(Noise):
+=======
 class ImpulseNoise:
+>>>>>>> main
     def __init__(self,
                  *,
                  low_threshold: float, 
@@ -162,7 +196,11 @@ class ImpulseNoise:
 
 
 
+<<<<<<< HEAD
+class FrequencyNoise(Noise):
+=======
 class FrequencyNoise:
+>>>>>>> main
     def __init__(self,
                  *,
                  min_freq: int, 
@@ -202,7 +240,11 @@ class FrequencyNoise:
 
 
 
+<<<<<<< HEAD
+class ClippingNoise(Noise):
+=======
 class ClippingNoise:
+>>>>>>> main
     def __init__(self,
                  *,
                  threshold: float) -> None:
