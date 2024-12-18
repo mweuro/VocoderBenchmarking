@@ -7,7 +7,7 @@ from transformers import Wav2Vec2Processor, Wav2Vec2Model
 from sklearn.metrics.pairwise import rbf_kernel, polynomial_kernel
 from pymcd.mcd import Calculate_MCD
 from torch.nn.utils.rnn import pad_sequence
-from pesq import pesq
+from torchmetrics.audio.pesq import PerceptualEvaluationSpeechQuality
 from tqdm import tqdm
 import random
 
@@ -15,14 +15,12 @@ import random
 processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base-960h")
 model = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base-960h")
 mcd_toolbox = Calculate_MCD(MCD_mode="dtw")
+pesq = PerceptualEvaluationSpeechQuality(16000, 'wb')
 
 
-def load_audio(file_path, target_sr=16000):
+def load_audio(file_path):
     """Wczytuje plik WAV i resampluje do target_sr."""
     waveform, sr = torchaudio.load(file_path)
-    if sr != target_sr:
-        resampler = torchaudio.transforms.Resample(sr, target_sr)
-        waveform = resampler(waveform)
     waveform = waveform.mean(dim=0)  # Konwersja do mono
     return waveform
 
@@ -55,7 +53,8 @@ def calculate_sdr(src_wavs, gen_wavs):
 
 def extract_embeddings(processor, model, waveforms):
     """Ekstrakcja embeddingów za pomocą pretrenowanego modelu Wav2Vec 2.0."""
-    inputs = processor(waveforms, sampling_rate=16000, return_tensors="pt", padding=True)
+    resampler = torchaudio.transforms.Resample(48000, 16000)
+    inputs = processor(pad_sequence([resampler(wav) for wav in waveforms], batch_first=True), sampling_rate=16000, return_tensors="pt", padding=True)
     with torch.no_grad():
         outputs = model(input_values=inputs['input_values'].squeeze(0))
     # Średnia po czasie dla globalnych embeddingów
@@ -112,15 +111,16 @@ def calculate_mcd(src_files, gen_files):
 def calculate_pesq(src_wavs, gen_wavs):
     results = []
     for src, gen in zip(src_wavs, gen_wavs):
-        src = (src.numpy() * 32767).astype(np.int16)
-        gen = (gen.numpy() * 32767).astype(np.int16)
-        results.append(pesq(16000, src, gen, 'wb'))
+        min_len = min(len(src), len(gen))
+        src = src[:min_len]
+        gen = gen[:min_len]
+        results.append(pesq(src, gen))
     return np.mean(results)
 
 
 def calculate_metrics(src_wavs, gen_wavs, src_embeddings=None, gen_embeddings=None):
     '''
-    Jeżeli zamiast ścieżki do wczytania dostarczane są wcześniej wczytane wav, powinny mieć sr=16000
+    Jeżeli zamiast ścieżki do wczytania dostarczane są wcześniej wczytane wav, powinny mieć sr=48000
     '''
     results = {}
 
@@ -171,23 +171,22 @@ def calculate_metrics_for_all_data(src_paths, gen_paths_list, model_names, n_spl
         section_src_paths = [path for i, path in enumerate(src_paths) if i in section]
         src_wavs = [load_audio(path) for path in section_src_paths]
         src_log_specs = [librosa.amplitude_to_db(np.abs(librosa.stft(wav.cpu().numpy())), ref=np.max) for wav in src_wavs]
-        src_embeddings = extract_embeddings(processor, model, pad_sequence(src_wavs, batch_first=True))
+        src_embeddings = extract_embeddings(processor, model, src_wavs)
         src_mean = np.mean(src_embeddings, axis=0)
         src_cov = np.cov(src_embeddings, rowvar=False)
         src_K = rbf_kernel(src_embeddings)
-        src_wavs_int = [(wav.numpy() * 32767).astype(np.int16) for wav in src_wavs]
+        # src_wavs_int = [(wav.numpy() * 32767).astype(np.int16) for wav in src_wavs]
 
         for gen_paths, model_name in tqdm(zip(gen_paths_list, model_names)):
-            # result = {'model': model_name, 'sdr': [], 'fad': [], 'kid': [], 'mcd': [], 'pesq': []}
             result = results[model_name]
             section_gen_paths = [path for i, path in enumerate(gen_paths) if i in section]
             gen_wavs = [load_audio(path) for path in section_gen_paths]
             gen_log_specs = [librosa.amplitude_to_db(np.abs(librosa.stft(wav.cpu().numpy())), ref=np.max) for wav in gen_wavs]
-            gen_embeddings = extract_embeddings(processor, model, pad_sequence(gen_wavs, batch_first=True))
+            gen_embeddings = extract_embeddings(processor, model, gen_wavs)
             gen_mean = np.mean(gen_embeddings, axis=0)
             gen_cov = np.cov(gen_embeddings, rowvar=False)
             gen_K = rbf_kernel(gen_embeddings)
-            gen_wavs_int = [(wav.numpy() * 32767).astype(np.int16) for wav in gen_wavs]
+            # gen_wavs_int = [(wav.numpy() * 32767).astype(np.int16) for wav in gen_wavs]
 
             # SDR
             sdrs = []
@@ -221,8 +220,14 @@ def calculate_metrics_for_all_data(src_paths, gen_paths_list, model_names, n_spl
 
             # pesq
             pesqs = []
-            for src, gen in zip(src_wavs_int, gen_wavs_int):
-                pesqs.append(pesq(16000, src, gen, 'wb'))
+            for src, gen in zip(src_wavs, gen_wavs):
+                min_len = min(len(src), len(gen))
+                src = src[:min_len]
+                gen = gen[:min_len]
+                try:
+                    pesqs.append(pesq(src, gen))
+                except:
+                    pesqs.append(0)
             result['pesq'].append(np.mean(pesqs))
 
     for model_name in model_names:
