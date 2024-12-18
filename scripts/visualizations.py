@@ -61,11 +61,7 @@ def _prepare_spectogram(signal: Union[np.ndarray, torch.Tensor],
 
 def plot_wave(signal: Union[np.ndarray, torch.Tensor], 
               *,
-<<<<<<< HEAD
               sr: int = 22050, 
-=======
-              sr: int, 
->>>>>>> main
               title: str = 'Signal Wave',
               figsize: tuple[int] = (15, 5)) -> None:
     
